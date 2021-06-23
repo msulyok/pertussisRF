@@ -1,0 +1,380 @@
+---
+title: "Pertussis RF"
+author: "Sulyok Walker"
+date: "6/9/2021"
+output: word_document
+---
+
+```{r setup, echo=TRUE}
+
+#######import data################
+
+library(readxl)
+weeklyseveritygermany <- read_excel("Downloads/weeklyseveritygermany(1).xlsx")
+data <- weeklyseveritygermany[0:74,]
+
+
+
+# load the packages
+library(tidyverse)
+suppressPackageStartupMessages(require(tsibble))
+suppressPackageStartupMessages(require(randomForest))
+suppressPackageStartupMessages(require(forecast))
+
+Data<-data[c(3,12, 14, 16, 18, 20, 22, 24, 26, 47)]
+dataa<-drop_na(Data) 
+
+
+
+
+# estimate the required order of differencing
+
+
+dataa<-as.ts(dataa, start=c(2020, 1), frequency=52)
+ndiffs(dataa)
+# log transform and difference the data
+#dataa <- log(dataa) ### makes to much NaNs
+
+dataa %>% diff(1)
+lag_order <- 6 # the desired number of lags (six weeks)
+horizon <- 12 # the forecast horizon (twelve weeks)
+
+d_mbd <- embed(dataa, lag_order + 1)
+dframe<-as.data.frame(d_mbd)
+
+##########train test split#############################
+
+test<-dframe[54:68,] 
+dframe<-dframe[1:53,] #from 2020 feb 9 to 2021 feb 7
+
+
+  # fit the model
+library(randomForestSRC)
+  set.seed(123)
+tunedgrow<-tune.rfsrc(V1 ~. , data=dframe, ntree=50, nodesize=2, mtry=3, trace=TRUE, na.action="na.omit")
+tunedgrow
+set.seed(123) 
+grow<-rfsrc(V1 ~. , data=dframe, ntree=50, nodesize=2, mtry=3, trace=TRUE, na.action="na.omit")
+grow
+
+
+library(ggRandomForests)
+
+gg_md <- gg_minimal_depth(grow)
+
+md<-plot(gg_md)
+md
+pdf(file = "md",   
+    width = 5, 
+    height = 8) 
+plot(md)
+dev.off()
+
+set.seed(123)
+vimps<-gg_vimp(grow)
+vimps
+
+pdf(file = "vimp",   
+    width = 5, 
+    height = 8) 
+plot(vimps)
+dev.off()
+
+
+plot(gg_minimal_vimp(gg_md))
+
+set.seed(12345)
+pred<-predict(grow, test)
+pred
+pred$predicted
+
+RMSE = function(m, o){
+  sqrt(mean((m - o)^2))
+}
+
+RMSE(pred$predicted, test$V1)
+
+
+
+###### PD plots ################################
+
+par(mar=c(1, 1, 1, 1))
+
+
+pdf(file = "partial",   
+    width = 15, 
+    height = 15) 
+plot.variable(grow, partial = TRUE, smooth.lines = TRUE)
+
+pdf(file = "v2",   
+    width = 5, 
+    height = 5) 
+plot.variable(grow, 'V2', partial = TRUE, notch = FALSE)
+
+pdf(file = "v3",   
+    width = 5, 
+    height = 5) 
+plot.variable(grow, 'V3', partial = TRUE, notch = FALSE)
+
+pdf(file = "v4",   
+    width = 5, 
+    height = 5) 
+plot.variable(grow, 'V4', partial = TRUE, notch = FALSE)
+
+pdf(file = "v5",   
+    width = 5, 
+    height = 5) 
+plot.variable(grow, 'V5', partial = TRUE, notch = FALSE)
+
+pdf(file = "v6",   
+    width = 5, 
+    height = 5) 
+plot.variable(grow, 'V6', partial = TRUE, notch = FALSE)
+
+pdf(file = "v7",   
+    width = 5, 
+    height = 5) 
+plot.variable(grow, 'V7', partial = TRUE, notch = FALSE)
+
+pdf(file = "v8",   
+    width = 5, 
+    height = 5) 
+plot.variable(grow, 'V8', partial = TRUE, notch = FALSE)
+
+pdf(file = "v9",   
+    width = 5, 
+    height = 5) 
+plot.variable(grow, 'V9', partial = TRUE, notch = FALSE)
+
+pdf(file = "v10",   
+    width = 5, 
+    height = 5) 
+plot.variable(grow, 'V10', partial = TRUE, notch = FALSE)
+
+ dev.off()
+
+
+ 
+
+
+
+
+
+################arima#############
+
+
+weeklyseveritygermany <- read_excel("Downloads/weeklyseveritygermany(1).xlsx")
+data <- weeklyseveritygermany[6:74,] #skip the first 6 to make it withthe same length with RF embd-
+datatrain<-data[1:53,]
+datatest<-data[54:68,]  #from 2021 02 14 to 05.09
+
+xregtrain<-as.matrix(datatrain[c(12, 14, 16, 18, 20, 22, 24, 26, 47)])
+xregtest<-as.matrix(datatest[c(12, 14, 16, 18, 20, 22, 24, 26, 47)])
+
+
+##### here it works ########
+library(forecast)
+library(fable)
+library(feasts)
+ndiffs(datatrain$KH)
+acf(datatrain$KH)
+pacf(datatrain$KH)
+
+arimatrain <- Arima(datatrain$KH, order = c(1, 2, 1),
+                    xreg = xregtrain, lambda=BoxCox.lambda(datatrain$KH))
+BoxCox.lambda(datatrain$KH)
+residuals(arimatrain)
+coef(arimatrain)
+checkresiduals(arimatrain)
+arimatrain
+plot(residuals(arimatrain))
+
+
+fc<-forecast(arimatrain, as.ts(datatest$KH), xreg=xregtest, lambda=BoxCox.lambda(datatrain$KH) )
+accuracy(fc, datatest$KH)
+
+y_pred <- ts(pred$predicted
+             ,
+             start = c(2021, 1),   
+             frequency = 52
+)
+# add the forecasts to the original tibble
+datatest$predrf<-y_pred
+datatest$predarima<-fc$mean
+dm.test(datatest$KH-datatest$predrf,datatest$KH-datatest$predarima )
+
+# visualize the forecasts
+plot_fc <- datatest %>% 
+   ggplot(aes(x = date)) +
+   geom_line(aes(y = KH)) +
+   geom_line(aes(y = predrf), color = "blue") +
+   geom_line(aes(y = predarima), color="red") +
+   theme_classic() +
+   labs(
+      title = "Forecast of Pertussis cases",
+      y = "Weekly case numbers"
+   )
+plot_fc
+
+
+
+ 
+
+###### plots########
+
+ 
+
+library(ggplot2)
+
+ 
+
+plot(weeklyseveritygermany$KH, weeklyseveritygermany$date)
+
+ 
+
+datagraph <- ggplot(weeklyseveritygermany, aes(x = date, y = KH)) +
+
+  geom_line()+
+
+    labs (y= "Case numbers", x = "Date")
+
+datagraph
+
+ 
+
+predictor_si <- ggplot(weeklyseveritygermany, aes(x = date, y = StringencyIndex)) +
+
+  geom_line()+
+
+  expand_limits(y=c(0, 4)) +
+
+  labs (y= "Index", x = "Date")+
+
+  ggtitle ("Stringency Index")
+
+predictor_si
+
+ 
+
+ 
+
+predictor_school <- ggplot(weeklyseveritygermany, aes(x = date, y = school)) +
+
+  geom_line()+
+
+  expand_limits(y=c(0, 4)) +
+
+  labs (y= "Index", x = "Date")+
+
+ggtitle ("School")
+
+predictor_school
+
+ 
+
+predictor_work <- ggplot(weeklyseveritygermany, aes(x = date, y = workplace)) +
+
+  geom_line()+
+
+  expand_limits(y=c(0, 4)) +
+
+  labs (y= "Index", x = "Date") +
+
+  ggtitle ("Workplace")
+
+predictor_work
+
+ 
+
+ 
+
+predictor_publictransport <- ggplot(weeklyseveritygermany, aes(x = date, y = publictransport)) +
+
+  geom_line()+
+
+  expand_limits(y=c(0, 4)) +
+
+  labs (y= "Index", x = "Date") +
+
+  ggtitle("Public Transport")
+
+predictor_publictransport
+
+ 
+
+predictor_gathering <- ggplot(weeklyseveritygermany, aes(x = date, y = gatherings)) +
+
+  geom_line()+
+
+  expand_limits(y=c(0, 4)) +
+
+  labs (y= "Index", x = "Date") +
+
+  ggtitle("Gatherings")
+
+predictor_gathering
+
+ 
+
+predictor_publicevent <- ggplot(weeklyseveritygermany, aes(x = date, y = publicevent)) +
+
+  geom_line()+
+
+  expand_limits(y=c(0, 4)) +
+
+  labs (y= "Index", x = "Date") +
+
+  ggtitle("Public Event")
+
+predictor_publicevent
+
+ 
+
+predictor_stayathome <- ggplot(weeklyseveritygermany, aes(x = date, y = stayathome)) +
+
+  geom_line()+
+
+  expand_limits(y=c(0, 4)) +
+
+  labs (y= "Index", x = "Date")+
+
+  ggtitle("Stay at Home")
+
+predictor_stayathome
+
+ 
+
+predictor_international <- ggplot(weeklyseveritygermany, aes(x = date, y = internationatravel)) +
+
+  geom_line()+
+
+  expand_limits(y=c(0, 4)) +
+
+  labs (y= "Index", x = "Date")
+#predictor_international
+
+
+ 
+
+predictor_internal <- ggplot(weeklyseveritygermany, aes(x = date, y = internalmovement)) +
+
+  geom_line()+
+
+  expand_limits(y=c(0, 4)) +
+
+  labs (y= "Index", x = "Date") +
+
+  ggtitle("Internal Movement")
+
+predictor_internal
+
+ 
+
+
+
+
+
+
+
+ sessionInfo()
+```
